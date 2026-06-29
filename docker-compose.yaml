@@ -1,0 +1,5 @@
+services:
+  chiselle:
+    build: .
+    image: chiselle
+    restart: "unless-stopped"
