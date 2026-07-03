@@ -2,6 +2,7 @@ import argparse
 import io
 import logging
 import math
+import os
 import random
 import typing
 
@@ -9,6 +10,14 @@ import discord
 import dotenv
 from discord import app_commands
 from PIL import Image, ImageDraw, ImageFont
+
+from app.shapes.catenary import fill_catenary
+from app.shapes.egg import fill_egg
+from app.shapes.lancet import fill_lancet
+from app.shapes.oval import fill_oval
+from app.shapes.polygon import fill_polygon
+from app.shapes.horseshoe import fill_horseshoe
+from app.shapes.star import fill_star
 
 COLOR_BG = (30, 30, 30, 255)
 COLOR_VOXEL = (180, 130, 70, 255)
@@ -20,281 +29,6 @@ TERMS_OF_ENDEARMENT = ["sweety", "honey", "doll", "baby", "sweetheart", "darlin'
 ACTIVITIES = ["Chiseling better than you 💅"]
 
 
-# ================= RENDER LOGIC =================
-
-
-def _fill_oval(
-    width: int, height: int, hollow: bool, thickness: float
-) -> tuple[int, int, list[list[bool]], float, float, str, typing.Callable]:
-    rx, ry = width / 2.0, height / 2.0
-    grid_w = math.ceil(width) + 4
-    grid_h = math.ceil(height) + 4
-    if grid_w % 2 != 0:
-        grid_w += 1
-    if grid_h % 2 != 0:
-        grid_h += 1
-    cx, cy = grid_w / 2.0, grid_h / 2.0
-
-    filled = [[False] * grid_w for _ in range(grid_h)]
-    for vy in range(grid_h):
-        for vx in range(grid_w):
-            dx = (vx + 0.5) - cx
-            dy = (vy + 0.5) - cy
-            nd = (dx / rx) ** 2 + (dy / ry) ** 2 if rx > 0 and ry > 0 else 999
-            if hollow:
-                ri, rj = rx - thickness, ry - thickness
-                nd_in = (dx / ri) ** 2 + (dy / rj) ** 2 if ri > 0 and rj > 0 else 999
-                filled[vy][vx] = nd <= 1.0 and nd_in >= 1.0
-            else:
-                filled[vy][vx] = nd <= 1.0
-
-    def draw_outline(draw: ImageDraw.ImageDraw, cell_px: int) -> None:
-        bbox = [
-            (cx - rx) * cell_px,
-            (cy - ry) * cell_px,
-            (cx + rx) * cell_px,
-            (cy + ry) * cell_px,
-        ]
-        draw.ellipse(bbox, outline=COLOR_SHAPE_EDGE, width=2)
-
-    label = f"oval {width}×{height}"
-    return grid_w, grid_h, filled, cx, cy, label, draw_outline
-
-
-def _lancet_inside(
-    px: float, py: float, a: float, H: float, R: float, d: float
-) -> bool:
-    if py < 0:
-        return False
-    dist_left = math.sqrt((px - d) ** 2 + py**2)
-    dist_right = math.sqrt((px + d) ** 2 + py**2)
-    return dist_left <= R and dist_right <= R
-
-
-def _fill_lancet(
-    width: int, height: int, hollow: bool, thickness: float
-) -> tuple[int, int, list[list[bool]], float, float, str, typing.Callable]:
-    a = width / 2.0
-    H: float = height
-
-    if H <= a:
-        # Degenerate: make it at least slightly pointed
-        H = a + 0.01
-
-    # Arc geometry:  d = (H² - a²) / (2a),  R = (a² + H²) / (2a)
-    d = (H * H - a * a) / (2.0 * a)
-    R = (a * a + H * H) / (2.0 * a)
-
-    grid_w = math.ceil(width) + 4
-    grid_h = math.ceil(height) + 4
-    if grid_w % 2 != 0:
-        grid_w += 1
-    if grid_h % 2 != 0:
-        grid_h += 1
-
-    # Place the arch so its base sits at the bottom of the grid
-    # cx = horizontal centre, base_y = bottom row (in voxel coords, y-down)
-    cx = grid_w / 2.0
-    base_y = grid_h - 2  # 2-voxel padding at bottom
-    cy = base_y - H / 2.0  # vertical midpoint (for crosshair)
-
-    filled = [[False] * grid_w for _ in range(grid_h)]
-    for vy in range(grid_h):
-        for vx in range(grid_w):
-            # Convert to arch coords: origin at base-centre, Y-up
-            px = (vx + 0.5) - cx
-            py = base_y - (vy + 0.5)  # flip Y
-            inside = _lancet_inside(px, py, a, H, R, d)
-            if hollow:
-                a_in = a - thickness
-                H_in = H - thickness
-                if a_in > 0 and H_in > a_in:
-                    d_in = (H_in * H_in - a_in * a_in) / (2.0 * a_in)
-                    R_in = (a_in * a_in + H_in * H_in) / (2.0 * a_in)
-                    inside_inner = _lancet_inside(
-                        px, py - thickness, a_in, H_in, R_in, d_in
-                    )
-                    # Also keep the base strip
-                    if py < thickness:
-                        inside_inner = False
-                else:
-                    inside_inner = False
-                filled[vy][vx] = inside and not inside_inner
-            else:
-                filled[vy][vx] = inside
-
-    def draw_outline(draw: ImageDraw.ImageDraw, cell_px: int) -> None:
-        # Draw the two arcs as polylines + the base line
-        steps = 200
-        pts_left = []
-        pts_right = []
-
-        # Left arc: centre at (d, 0) in arch coords
-        # Sweeps from the base-left corner (-a, 0) up to the apex (0, H)
-        # Angle from centre (d,0) to (-a, 0):  atan2(0, -a-d) = pi
-        # Angle from centre (d,0) to (0, H):   atan2(H, -d)
-        ang_start_l = math.atan2(0, -a - d)  # = pi
-        ang_end_l = math.atan2(H, 0 - d)
-        for i in range(steps + 1):
-            t = i / steps
-            ang = ang_start_l + t * (ang_end_l - ang_start_l)
-            ax = d + R * math.cos(ang)
-            ay = R * math.sin(ang)
-            # Convert to pixel coords
-            sx = (cx + ax) * cell_px
-            sy = (base_y - ay) * cell_px
-            pts_left.append((sx, sy))
-
-        # Right arc: centre at (-d, 0), mirrors left
-        ang_start_r = math.atan2(0, a + d)  # = 0
-        ang_end_r = math.atan2(H, 0 + d)
-        for i in range(steps + 1):
-            t = i / steps
-            ang = ang_start_r + t * (ang_end_r - ang_start_r)
-            ax = -d + R * math.cos(ang)
-            ay = R * math.sin(ang)
-            sx = (cx + ax) * cell_px
-            sy = (base_y - ay) * cell_px
-            pts_right.append((sx, sy))
-
-        # Base line
-        base_px_y = base_y * cell_px
-        left_x = (cx - a) * cell_px
-        right_x = (cx + a) * cell_px
-        draw.line(
-            [(left_x, base_px_y), (right_x, base_px_y)], fill=COLOR_SHAPE_EDGE, width=2
-        )
-        # Arcs
-        if len(pts_left) > 1:
-            draw.line(pts_left, fill=COLOR_SHAPE_EDGE, width=2)
-        if len(pts_right) > 1:
-            draw.line(pts_right, fill=COLOR_SHAPE_EDGE, width=2)
-
-    label = f"lancet {width}×{height}"
-    return grid_w, grid_h, filled, cx, cy, label, draw_outline
-
-
-def _solve_catenary_a(half: float, height: float, iterations: int = 80) -> float:
-    """Solve  height = a * (cosh(half / a) - 1)  for the catenary parameter a.
-
-    The right-hand side is strictly decreasing in a (small a -> tall and
-    pointy, large a -> shallow), so a plain bisection converges reliably.
-    """
-
-    def f(a: float) -> float:
-        x = half / a
-        if x > 700:  # cosh overflow guard
-            return float("inf")
-        return a * (math.cosh(x) - 1) - height
-
-    lo = 1e-9  # f(lo) -> +inf  (very tall)
-    hi = max(half * half / (2 * height), half) * 4.0
-    while f(hi) > 0:  # ensure hi brackets the root
-        hi *= 2.0
-    for _ in range(iterations):
-        mid = 0.5 * (lo + hi)
-        if f(mid) > 0:
-            lo = mid  # root is at larger a
-        else:
-            hi = mid
-    return 0.5 * (lo + hi)
-
-
-def _catenary_top(px: float, a: float, height: float, half: float) -> float:
-    """Height of the inverted catenary arch at horizontal offset px.
-    Returns -1 outside the span so the inside-test fails cleanly."""
-    if abs(px) > half:
-        return -1.0
-    x = px / a
-    if x > 700:
-        return -1.0
-    return height + a - a * math.cosh(x)
-
-
-def _fill_catenary(
-    width: int, height: int, thickness: float, end_offset: int
-) -> tuple[int, int, list[list[bool]], float, float, str, typing.Callable]:
-    """A hanging rope/vine: a catenary that sags downward between two anchors.
-
-    width       horizontal span between anchors (voxels)
-    height      sag depth -- how far the rope dips at its lowest point
-    thickness   rope thickness (voxels)
-    end_offset  vertical drop of the right anchor relative to the left
-                (positive = right end lower; negative = right end higher)
-    """
-    W = float(width)
-    H = float(height) if height > 0 else 0.01
-    T = max(1.0, float(thickness))
-    E = float(end_offset)
-
-    half = W / 2.0
-    xc = W / 2.0
-    a = _solve_catenary_a(half, H)
-
-    def center_depth(x: float) -> float:
-        s = _catenary_top(x - xc, a, H, half)  # symmetric sag profile (>= 0)
-        if s < 0.0:
-            s = 0.0
-        return (E / W) * x + s  # linear tilt for uneven ends
-
-    def center_slope(x: float) -> float:
-        return (E / W) - math.sinh((x - xc) / a)
-
-    # Vertical span of the centreline, so the grid fits the rope + its thickness
-    probe = [center_depth(W * i / 200.0) for i in range(201)]
-    dmin = min(min(probe), 0.0)
-    dmax = max(max(probe), 0.0)
-
-    grid_w = math.ceil(W) + 4
-    grid_h = math.ceil((dmax - dmin) + T) + 4
-    if grid_w % 2 != 0:
-        grid_w += 1
-    if grid_h % 2 != 0:
-        grid_h += 1
-
-    left_x = 2.0  # world x = 0 sits 2 voxels from the left
-    top_y = 2.0 + (T / 2.0) - dmin  # highest point of the rope ~2 from the top
-
-    cx = left_x + W / 2.0
-    cy = top_y + center_depth(W / 2.0)
-
-    half_t = T / 2.0
-    filled = [[False] * grid_w for _ in range(grid_h)]
-    for vy in range(grid_h):
-        for vx in range(grid_w):
-            wx = (vx + 0.5) - left_x
-            wy = vy + 0.5
-            if wx < 0.0 or wx > W:  # only between the two anchors
-                continue
-            m = center_slope(wx)
-            cyl = top_y + center_depth(wx)
-            perp = abs(wy - cyl) / math.sqrt(1.0 + m * m)  # perpendicular gap
-            filled[vy][vx] = perp <= half_t
-
-    def draw_outline(draw: ImageDraw.ImageDraw, cell_px: int) -> None:
-        steps = 240
-        cen, up, lo = [], [], []
-        for i in range(steps + 1):
-            wx = W * i / steps
-            cyl = top_y + center_depth(wx)
-            m = center_slope(wx)
-            nlen = math.sqrt(1.0 + m * m)
-            nx, ny = -m / nlen, 1.0 / nlen  # unit normal
-            cen.append(((left_x + wx) * cell_px, cyl * cell_px))
-            up.append(
-                ((left_x + wx + nx * half_t) * cell_px, (cyl + ny * half_t) * cell_px)
-            )
-            lo.append(
-                ((left_x + wx - nx * half_t) * cell_px, (cyl - ny * half_t) * cell_px)
-            )
-        draw.line(cen, fill=COLOR_CENTER_MARK, width=1)  # ideal centreline
-        draw.line(up, fill=COLOR_SHAPE_EDGE, width=2)  # rope edges
-        draw.line(lo, fill=COLOR_SHAPE_EDGE, width=2)
-
-    label = f"catenary {width}×{height}  t={thickness}  end={end_offset}"
-    return grid_w, grid_h, filled, cx, cy, label, draw_outline
-
-
 def render(
     shape: str,
     width: int,
@@ -303,22 +37,45 @@ def render(
     block_size: int = 16,
     block_offset_x: int = 0,
     block_offset_y: int = 0,
-    hollow: bool = False,
-    thickness: float = 1.0,
+    border: float | None = None,
     end_offset: int = 0,
+    asymmetry: float = 0.0,
+    sides: int = 3,
+    angle: float = 0.0,
+    opening: float = 62.0,
+    nails: int = 7,
+    inner_ratio: float = 0.5,
 ) -> tuple[io.BytesIO, int]:
     # ── Pick shape ────────────────────────────────────────────────────────
     if shape == "oval":
-        grid_w, grid_h, filled, cx, cy, label, draw_outline = _fill_oval(
-            width, height, hollow, thickness
+        grid_w, grid_h, filled, cx, cy, label, draw_outline = fill_oval(
+            width, height, border
         )
     elif shape == "lancet":
-        grid_w, grid_h, filled, cx, cy, label, draw_outline = _fill_lancet(
-            width, height, hollow, thickness
+        grid_w, grid_h, filled, cx, cy, label, draw_outline = fill_lancet(
+            width, height, border
         )
     elif shape == "catenary":
-        grid_w, grid_h, filled, cx, cy, label, draw_outline = _fill_catenary(
-            width, height, thickness, end_offset
+        if not border:
+            border = 1.0
+        grid_w, grid_h, filled, cx, cy, label, draw_outline = fill_catenary(
+            width, height, border, end_offset
+        )
+    elif shape == "egg":
+        grid_w, grid_h, filled, cx, cy, label, draw_outline = fill_egg(
+            width, height, border, asymmetry
+        )
+    elif shape == "polygon":
+        grid_w, grid_h, filled, cx, cy, label, draw_outline = fill_polygon(
+            width, height, border, sides, angle
+        )
+    elif shape == "horseshoe":
+        grid_w, grid_h, filled, cx, cy, label, draw_outline = fill_horseshoe(
+            width, height, border, opening, angle, nails
+        )
+    elif shape == "star":
+        grid_w, grid_h, filled, cx, cy, label, draw_outline = fill_star(
+            width, height, border, sides, angle, inner_ratio
         )
     else:
         raise ValueError(f"Unknown shape: {shape}")
@@ -355,7 +112,7 @@ def render(
             draw.line([(0, p), (img_w, p)], fill=COLOR_GRID_MAJOR, width=3)
 
     # Mathematical outline
-    draw_outline(draw, cell_px)
+    draw_outline(draw, cell_px, COLOR_SHAPE_EDGE, COLOR_CENTER_MARK)
 
     # Centre crosshair
     cpx, cpy = cx * cell_px, cy * cell_px
@@ -374,7 +131,7 @@ def render(
     info_lines = [
         f"{label}   grid = {grid_w}×{grid_h}",
         f"block = {block_size}   offset = ({block_offset_x}, {block_offset_y})",
-        f"{'hollow  t=' + str(thickness) if hollow else 'filled'}",
+        f"{'hollow  t=' + str(border) if border else 'filled'}",
     ]
     ty = 4
     for line in info_lines:
@@ -421,10 +178,6 @@ def render(
 
 # ================= DISCORD =================
 
-TOKEN = dotenv.get_key(".env", "TOKEN")
-if not TOKEN:
-    raise Exception("Must provide Discord Token!")
-
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
@@ -440,8 +193,14 @@ def generate_embed(
     offset_x: int,
     offset_y: int,
     total_voxels: int,
-    thickness: float | None = None,
+    border: float | None = None,
     end_offset: int | None = None,
+    asymmetry: float | None = None,
+    sides: int | None = None,
+    angle: float | None = None,
+    opening: float | None = None,
+    nails: int | None = None,
+    inner_ratio: float | None = None,
 ) -> discord.Embed:
     embed = discord.Embed(title=title, description=description, color=color)
     embed.set_image(url="attachment://shape.png")
@@ -452,10 +211,22 @@ def generate_embed(
         embed.add_field(name="X Offset", value=str(offset_x), inline=True)
     if offset_y:
         embed.add_field(name="Y Offset", value=str(offset_y), inline=True)
-    if thickness:
-        embed.add_field(name="Thickness", value=str(thickness), inline=True)
+    if border:
+        embed.add_field(name="Border/Thickness", value=str(border), inline=True)
     if end_offset:
         embed.add_field(name="End Offset", value=str(end_offset), inline=True)
+    if asymmetry:
+        embed.add_field(name="Asymmetry", value=str(asymmetry), inline=True)
+    if sides:
+        embed.add_field(name="Sides/Points", value=str(sides), inline=True)
+    if angle:
+        embed.add_field(name="Angle", value=f"{angle}°", inline=True)
+    if opening:
+        embed.add_field(name="Opening", value=f"{opening}°", inline=True)
+    if nails is not None:
+        embed.add_field(name="Nails", value=str(nails), inline=True)
+    if inner_ratio:
+        embed.add_field(name="Inner Ratio", value=str(inner_ratio), inline=True)
 
     embed.add_field(name="Total Voxels", value=str(total_voxels), inline=True)
 
@@ -480,8 +251,7 @@ async def on_ready() -> None:
     height="Height of the oval in voxels",
     offset_x="Grid offset on the X axis in voxels.",
     offset_y="Grid offset on the Y axis in voxels.",
-    hollow="Wether the shape should be hollow.",
-    border_thickness="The thickness of the shape border. Only applicable if hollow is set.",
+    border="Makes the shape hollow - specify the thickness of the shape border.",
 )
 async def oval(
     interaction: discord.Interaction,
@@ -489,20 +259,19 @@ async def oval(
     height: int,
     offset_x: int = 0,
     offset_y: int = 0,
-    hollow: bool = False,
-    border_thickness: float = 0.0,
+    border: float | None = None,
 ) -> None:
+    await interaction.response.defer(thinking=True)
     buffer, total_voxels = render(
         "oval",
         width=width,
         height=height,
         block_offset_x=offset_x,
         block_offset_y=offset_y,
-        hollow=hollow,
-        thickness=border_thickness,
+        border=border,
     )
 
-    await interaction.response.send_message(
+    await interaction.followup.send(
         embed=generate_embed(
             "Oval",
             f"A freshly generated oval, {random.choice(TERMS_OF_ENDEARMENT)} 💋",
@@ -512,9 +281,9 @@ async def oval(
             offset_x,
             offset_y,
             total_voxels,
-            border_thickness,
+            border,
         ),
-        file=discord.File(buffer, filename="oval.png"),
+        file=discord.File(buffer, filename="shape.png"),
     )
 
 
@@ -532,6 +301,7 @@ async def lancet(
     offset_x: int = 0,
     offset_y: int = 0,
 ) -> None:
+    await interaction.response.defer(thinking=True)
     buffer, total_voxels = render(
         "lancet",
         width=width,
@@ -540,7 +310,7 @@ async def lancet(
         block_offset_y=offset_y,
     )
 
-    await interaction.response.send_message(
+    await interaction.followup.send(
         embed=generate_embed(
             "Lancet Curve",
             f"A freshly generated Lancet Curve, {random.choice(TERMS_OF_ENDEARMENT)} 💋",
@@ -551,14 +321,14 @@ async def lancet(
             offset_y,
             total_voxels,
         ),
-        file=discord.File(buffer, filename="lancet.png"),
+        file=discord.File(buffer, filename="shape.png"),
     )
 
 
 @tree.command(description="Generate a hanging rope/vine (catenary)")
 @app_commands.describe(
-    width="Horizontal span between the two anchors in voxels",
-    height="Sag depth — how far the rope dips at its lowest point",
+    length="Horizontal span between the two anchors in voxels",
+    dip="Sag depth — how far the rope dips at its lowest point",
     thickness="Rope thickness in voxels",
     end_offset="Vertical drop of the right anchor vs the left (negative = right end higher)",
     offset_x="Grid offset on the X axis in voxels.",
@@ -566,38 +336,241 @@ async def lancet(
 )
 async def catenary(
     interaction: discord.Interaction,
-    width: int,
-    height: int,
+    length: int,
+    dip: int,
     thickness: float = 1.0,
     end_offset: int = 0,
     offset_x: int = 0,
     offset_y: int = 0,
 ) -> None:
+    await interaction.response.defer(thinking=True)
     buffer, total_voxels = render(
         "catenary",
-        width=width,
-        height=height,
-        thickness=thickness,
+        width=length,
+        height=dip,
+        border=thickness,
         end_offset=end_offset,
         block_offset_x=offset_x,
         block_offset_y=offset_y,
     )
 
-    await interaction.response.send_message(
+    await interaction.followup.send(
         embed=generate_embed(
             "Catenary Rope",
             f"A freshly draped rope, {random.choice(TERMS_OF_ENDEARMENT)} 💋",
             discord.Color.dark_green(),
-            width,
-            height,
+            length,
+            dip,
             offset_x,
             offset_y,
             total_voxels,
             thickness,
             end_offset,
         ),
-        file=discord.File(buffer, filename="catenary.png"),
+        file=discord.File(buffer, filename="shape.png"),
     )
 
 
-client.run(TOKEN)
+@tree.command(description="Generate an egg (Hügelschäffer oval)")
+@app_commands.describe(
+    width="Width (max breadth) of the egg in voxels",
+    height="Height (length) of the egg in voxels",
+    asymmetry="Pointiness: 0 = ellipse, ~0.3 = natural egg, up to 0.95.",
+    offset_x="Grid offset on the X axis in voxels.",
+    offset_y="Grid offset on the Y axis in voxels.",
+    border="Makes the shape hollow - specify the thickness of the shape border.",
+)
+async def egg(
+    interaction: discord.Interaction,
+    width: int,
+    height: int,
+    asymmetry: float = 0.3,
+    offset_x: int = 0,
+    offset_y: int = 0,
+    border: float = 0.0,
+) -> None:
+    await interaction.response.defer(thinking=True)
+    buffer, total_voxels = render(
+        "egg",
+        width=width,
+        height=height,
+        asymmetry=asymmetry,
+        block_offset_x=offset_x,
+        block_offset_y=offset_y,
+        border=border,
+    )
+
+    await interaction.followup.send(
+        embed=generate_embed(
+            "Egg",
+            f"A freshly laid egg, {random.choice(TERMS_OF_ENDEARMENT)} 💋",
+            discord.Color.from_rgb(220, 200, 150),
+            width,
+            height,
+            offset_x,
+            offset_y,
+            total_voxels,
+            border,
+            asymmetry=asymmetry,
+        ),
+        file=discord.File(buffer, filename="shape.png"),
+    )
+
+
+@tree.command(description="Generate a regular N-sided polygon")
+@app_commands.describe(
+    width="Width of the bounding box in voxels",
+    height="Height of the bounding box in voxels",
+    sides="Number of sides (3 = triangle, 4 = square, …)",
+    angle="Rotation in degrees (counter-clockwise; 0 = flat bottom)",
+    offset_x="Grid offset on the X axis in voxels.",
+    offset_y="Grid offset on the Y axis in voxels.",
+    border="Makes the shape hollow - specify the thickness of the shape border.",
+)
+async def polygon(
+    interaction: discord.Interaction,
+    width: int,
+    height: int,
+    sides: int,
+    angle: float = 0.0,
+    offset_x: int = 0,
+    offset_y: int = 0,
+    border: float | None = None,
+) -> None:
+    await interaction.response.defer(thinking=True)
+    buffer, total_voxels = render(
+        "polygon",
+        width=width,
+        height=height,
+        sides=sides,
+        angle=angle,
+        block_offset_x=offset_x,
+        block_offset_y=offset_y,
+        border=border,
+    )
+
+    await interaction.followup.send(
+        embed=generate_embed(
+            "Polygon",
+            f"A freshly chiselled {sides}-gon, {random.choice(TERMS_OF_ENDEARMENT)} 💋",
+            discord.Color.teal(),
+            width,
+            height,
+            offset_x,
+            offset_y,
+            total_voxels,
+            border,
+            sides=sides,
+            angle=angle,
+        ),
+        file=discord.File(buffer, filename="shape.png"),
+    )
+
+
+@tree.command(description="Generate a horseshoe")
+@app_commands.describe(
+    width="Width of the bounding box in voxels",
+    height="Height of the bounding box in voxels",
+    opening="Angular size of the gap at the top, in degrees",
+    angle="Rotation in degrees (counter-clockwise; 0 = opening at the top)",
+    nails="Number of nail holes along the band (0 to disable)",
+    offset_x="Grid offset on the X axis in voxels.",
+    offset_y="Grid offset on the Y axis in voxels.",
+    border="Band thickness in voxels (defaults to ~28% of the radius).",
+)
+async def horseshoe(
+    interaction: discord.Interaction,
+    width: int,
+    height: int,
+    opening: float = 62.0,
+    angle: float = 0.0,
+    nails: int = 7,
+    offset_x: int = 0,
+    offset_y: int = 0,
+    border: float | None = None,
+) -> None:
+    await interaction.response.defer(thinking=True)
+    buffer, total_voxels = render(
+        "horseshoe",
+        width=width,
+        height=height,
+        opening=opening,
+        angle=angle,
+        nails=nails,
+        block_offset_x=offset_x,
+        block_offset_y=offset_y,
+        border=border,
+    )
+
+    await interaction.followup.send(
+        embed=generate_embed(
+            "Horseshoe",
+            f"Another horse is shoeless... {random.choice(TERMS_OF_ENDEARMENT)} 💋",
+            discord.Color.dark_grey(),
+            width,
+            height,
+            offset_x,
+            offset_y,
+            total_voxels,
+            border,
+            opening=opening,
+            nails=nails,
+        ),
+        file=discord.File(buffer, filename="shape.png"),
+    )
+
+
+@tree.command(description="Generate an N-pointed star")
+@app_commands.describe(
+    width="Width of the bounding box in voxels",
+    height="Height of the bounding box in voxels",
+    points="Number of star points (5 = classic star)",
+    inner_ratio="Spikiness: valley radius as a fraction of the point radius (lower = spikier)",
+    angle="Rotation in degrees (counter-clockwise; 0 = a point straight up)",
+    offset_x="Grid offset on the X axis in voxels.",
+    offset_y="Grid offset on the Y axis in voxels.",
+    border="Makes the shape hollow - specify the thickness of the shape border.",
+)
+async def star(
+    interaction: discord.Interaction,
+    width: int,
+    height: int,
+    points: int,
+    inner_ratio: float = 0.5,
+    angle: float = 0.0,
+    offset_x: int = 0,
+    offset_y: int = 0,
+    border: float | None = None,
+) -> None:
+    await interaction.response.defer(thinking=True)
+    buffer, total_voxels = render(
+        "star",
+        width=width,
+        height=height,
+        sides=points,
+        inner_ratio=inner_ratio,
+        angle=angle,
+        block_offset_x=offset_x,
+        block_offset_y=offset_y,
+        border=border,
+    )
+
+    await interaction.followup.send(
+        embed=generate_embed(
+            "Star",
+            f"A freshly cut {points}-point star, {random.choice(TERMS_OF_ENDEARMENT)} 💋",
+            discord.Color.yellow(),
+            width,
+            height,
+            offset_x,
+            offset_y,
+            total_voxels,
+            border,
+            sides=points,
+            inner_ratio=inner_ratio,
+        ),
+        file=discord.File(buffer, filename="shape.png"),
+    )
+
+
+client.run(os.environ["DISCORD_TOKEN"])

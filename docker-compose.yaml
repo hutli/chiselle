@@ -3,3 +3,5 @@ services:
     build: .
     image: chiselle
     restart: "unless-stopped"
+    env_file:
+      - .env

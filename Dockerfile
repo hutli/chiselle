@@ -1,14 +1,12 @@
 FROM python:3.14
-WORKDIR /app/
+WORKDIR /wd
 
-COPY ./.env /app/src/
-COPY ./requirements.txt /app/
+COPY ./requirements.txt /wd/
+RUN pip install -r /wd/requirements.txt
 
-RUN pip install -r requirements.txt
+COPY ./mypy.ini /wd/
+COPY ./app /wd/app
 
-COPY ./mypy.ini /app/
-COPY ./app/*.py /app/src/
-RUN mypy src --config-file /app/mypy.ini
+RUN mypy app --config-file /wd/mypy.ini
 
-WORKDIR /app/src/
-CMD ["python", "app.py"]
+CMD ["python", "-m", "app.app"]
