@@ -57,7 +57,7 @@ def render(
         )
     elif shape == "catenary":
         if not border:
-            border = 1.0
+            border = 1.5
         grid_w, grid_h, filled, cx, cy, label, draw_outline = fill_catenary(
             width, height, border, end_offset
         )
@@ -338,7 +338,7 @@ async def catenary(
     interaction: discord.Interaction,
     length: int,
     dip: int,
-    thickness: float = 1.0,
+    thickness: float = 1.5,
     end_offset: int = 0,
     offset_x: int = 0,
     offset_y: int = 0,
@@ -571,6 +571,54 @@ async def star(
         ),
         file=discord.File(buffer, filename="shape.png"),
     )
+
+
+@tree.command(description="Calculate the raw fruit/syrup ratio with available fruit")
+@app_commands.describe(
+    total_fruit="Total amount of available fruit.",
+    juice_per_fruit="The amount of juice 1 fruit produces.",
+    syrup_per_juice="Ratio of syrup per juice.",
+    syrup_per_candy="Amount of syrup used by 1 piece of candy.",
+)
+async def candied_fruit(
+    interaction: discord.Interaction,
+    total_fruit: int,
+    juice_per_fruit: float = 0.3125,
+    syrup_per_juice: float = 0.25,
+    syrup_per_candy: float = 0.1,
+) -> None:
+    optimal = total_fruit * 1.28 / 2.28
+    to_juice = math.floor(optimal)
+
+    # Walk up by 1 if rounding down wastes fruit
+    for j in (to_juice, to_juice + 1):
+        juice = j * juice_per_fruit
+        syrup = juice * syrup_per_juice
+        candy = min(total_fruit - j, int(syrup / syrup_per_candy))
+        leftover_fruit = total_fruit - j - candy
+        leftover_syrup = syrup - candy * syrup_per_candy
+        if j == to_juice:
+            best = (j, candy, leftover_fruit, leftover_syrup)
+        elif candy > best[1] or (
+            candy == best[1] and leftover_fruit + leftover_syrup < best[2] + best[3]
+        ):
+            best = (j, candy, leftover_fruit, leftover_syrup)
+
+    j, candy, lf, ls = best
+
+    embed = discord.Embed(
+        title=f"{total_fruit} fruit batch to candy", color=discord.Color.red()
+    )
+
+    embed.add_field(name="Amount of fruit to juice", value=str(j), inline=True)
+    embed.add_field(
+        name="Amount of fruit to keep", value=str(total_fruit - j), inline=True
+    )
+    embed.add_field(name="Amount of candy created", value=str(candy), inline=True)
+    embed.add_field(name="Leftover fruit", value=str(lf), inline=True)
+    embed.add_field(name="Leftover syrup", value=f"{ls:.4f}L", inline=True)
+
+    await interaction.response.send_message(embed=embed)
 
 
 client.run(os.environ["DISCORD_TOKEN"])
