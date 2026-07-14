@@ -586,6 +586,8 @@ async def candied_fruit(
     juice_per_fruit: float = 0.3125,
     syrup_per_juice: float = 0.25,
     syrup_per_candy: float = 0.1,
+    juice_limit: float = 5.0,
+    bucket_limit: float = 10.0,
 ) -> None:
     optimal = total_fruit * 1.28 / 2.28
     to_juice = math.floor(optimal)
@@ -606,17 +608,76 @@ async def candied_fruit(
 
     j, candy, lf, ls = best
 
+    total_syrup_needed = candy * syrup_per_candy
+    total_juice_needed = total_syrup_needed / syrup_per_juice
+    total_fruit_needed = math.ceil(total_juice_needed / juice_per_fruit)
+
+    if total_juice_needed < juice_limit:
+        await interaction.response.send_message(
+            f"You only have enough fruit to juice {total_juice_needed}L. Which will not juice in the fruit press (you need at least {juice_limit}L).",
+            ephemeral=True,
+        )
+        return
+
+    fruit_per_bucket = int(bucket_limit // juice_per_fruit)
+
+    full_stacks = total_fruit_needed // fruit_per_bucket
+    left_over_fruit = total_fruit_needed - full_stacks * fruit_per_bucket
+    left_over_arr = [left_over_fruit]
+    if not left_over_fruit:
+        left_over_arr = []
+    elif left_over_fruit * juice_per_fruit < juice_limit:
+        full_stacks -= 1
+        juice_limit_fruit = math.ceil(juice_limit / juice_per_fruit)
+        left_over_arr = [
+            left_over_fruit + fruit_per_bucket - juice_limit_fruit,
+            juice_limit_fruit,
+        ]
+
     embed = discord.Embed(
         title=f"{total_fruit} fruit batch to candy", color=discord.Color.red()
     )
+    embed.description = "# Procedure:\n"
+    i = 1
+    if full_stacks:
+        embed.description += f"1. Juice {fruit_per_bucket} fruit {full_stacks} times (each gives {bucket_limit}L of juice)\n"
+        i += 1
+    for l in left_over_arr:
+        embed.description += (
+            f"{i}. Juice {l} fruits (Gives you {l*juice_per_fruit:.03}L of juice)\n"
+        )
+        i += 1
 
-    embed.add_field(name="Amount of fruit to juice", value=str(j), inline=True)
+    embed.description += f"{i}. Simmer {total_juice_needed:.03}L juice into {total_syrup_needed:.03}L of syrup\n"
+    i += 1
+    embed.description += (
+        f"{i}. Simmer the {candy} fruit with {candy*syrup_per_candy:.03}L of syrup\n"
+    )
+    i += 1
+    embed.description += f"{i}. Enjoy a refreshing cup of {total_fruit_needed * juice_per_fruit - total_juice_needed:.03}L juice\n"
+    i += 1
+
     embed.add_field(
-        name="Amount of fruit to keep", value=str(total_fruit - j), inline=True
+        name="Total amount of fruit to juice",
+        value=str(total_fruit_needed),
+        inline=True,
+    )
+    embed.add_field(
+        name="Amount of fruit to keep",
+        value=str(total_fruit - total_fruit_needed),
+        inline=True,
     )
     embed.add_field(name="Amount of candy created", value=str(candy), inline=True)
-    embed.add_field(name="Leftover fruit", value=str(lf), inline=True)
-    embed.add_field(name="Leftover syrup", value=f"{ls:.4f}L", inline=True)
+    embed.add_field(
+        name="Leftover fruit",
+        value=str(j - total_fruit_needed),
+        inline=True,
+    )
+    embed.add_field(
+        name="Leftover juice",
+        value=f"{total_fruit_needed * juice_per_fruit - total_juice_needed:.03}L",
+        inline=True,
+    )
 
     await interaction.response.send_message(embed=embed)
 
