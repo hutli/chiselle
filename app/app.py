@@ -45,11 +45,12 @@ def render(
     opening: float = 62.0,
     nails: int = 7,
     inner_ratio: float = 0.5,
+    coverage_threshold: float = 0.5,
 ) -> tuple[io.BytesIO, int]:
     # ── Pick shape ────────────────────────────────────────────────────────
     if shape == "oval":
         grid_w, grid_h, filled, cx, cy, label, draw_outline = fill_oval(
-            width, height, border
+            width, height, border, coverage_threshold
         )
     elif shape == "lancet":
         grid_w, grid_h, filled, cx, cy, label, draw_outline = fill_lancet(
@@ -249,6 +250,7 @@ async def on_ready() -> None:
 @app_commands.describe(
     width="Width of the oval in voxels",
     height="Height of the oval in voxels",
+    coverage_threshold="True oval coverage required to draw voxel. 0.0 = Any voxel touched by the oval gets drawn. 1.0 = Voxels must be completely covered by oval to be drawn.",
     offset_x="Grid offset on the X axis in voxels.",
     offset_y="Grid offset on the Y axis in voxels.",
     border="Makes the shape hollow - specify the thickness of the shape border.",
@@ -257,6 +259,7 @@ async def oval(
     interaction: discord.Interaction,
     width: int,
     height: int,
+    coverage_threshold: float = 0.5,
     offset_x: int = 0,
     offset_y: int = 0,
     border: float | None = None,
@@ -269,6 +272,7 @@ async def oval(
         block_offset_x=offset_x,
         block_offset_y=offset_y,
         border=border,
+        coverage_threshold=coverage_threshold,
     )
 
     await interaction.followup.send(
