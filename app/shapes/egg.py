@@ -28,13 +28,10 @@ def fill_egg(
     b = width / 2.0  # half-breadth (horizontal)
     w = max(0.0, min(asymmetry, 0.95)) * a  # asymmetry shift, kept < a
 
-    grid_w = math.ceil(width) + 4
-    grid_h = math.ceil(height) + 4
-    if grid_w % 2 != 0:
-        grid_w += 1
-    if grid_h % 2 != 0:
-        grid_h += 1
-    cx, cy = grid_w / 2.0, grid_h / 2.0
+    grid_w = max(1, math.ceil(width)) + 4
+    grid_h = max(1, math.ceil(height)) + 4
+    cx = width / 2.0 + 2
+    cy = height / 2.0 + 2
 
     filled = [[False] * grid_w for _ in range(grid_h)]
     for vy in range(grid_h):

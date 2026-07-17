@@ -68,12 +68,12 @@ def render(
         )
     elif shape == "polygon":
         grid_w, grid_h, filled, cx, cy, label, draw_outline = fill_polygon(
-            width, height, border, sides, angle
+            width, height, border, sides, angle, coverage_threshold
         )
-    elif shape == "horseshoe":
-        grid_w, grid_h, filled, cx, cy, label, draw_outline = fill_horseshoe(
-            width, height, border, opening, angle, nails
-        )
+    # elif shape == "horseshoe":
+    #     grid_w, grid_h, filled, cx, cy, label, draw_outline = fill_horseshoe(
+    #         width, height, border, opening, angle, nails
+    #     )
     elif shape == "star":
         grid_w, grid_h, filled, cx, cy, label, draw_outline = fill_star(
             width, height, border, sides, angle, inner_ratio
@@ -202,6 +202,7 @@ def generate_embed(
     opening: float | None = None,
     nails: int | None = None,
     inner_ratio: float | None = None,
+    coverage_threshold: float | None = None,
 ) -> discord.Embed:
     embed = discord.Embed(title=title, description=description, color=color)
     embed.set_image(url="attachment://shape.png")
@@ -212,22 +213,26 @@ def generate_embed(
         embed.add_field(name="X Offset", value=str(offset_x), inline=True)
     if offset_y:
         embed.add_field(name="Y Offset", value=str(offset_y), inline=True)
-    if border:
+    if border is not None:
         embed.add_field(name="Border/Thickness", value=str(border), inline=True)
-    if end_offset:
+    if end_offset is not None:
         embed.add_field(name="End Offset", value=str(end_offset), inline=True)
-    if asymmetry:
+    if asymmetry is not None:
         embed.add_field(name="Asymmetry", value=str(asymmetry), inline=True)
-    if sides:
+    if sides is not None:
         embed.add_field(name="Sides/Points", value=str(sides), inline=True)
-    if angle:
+    if angle is not None:
         embed.add_field(name="Angle", value=f"{angle}°", inline=True)
-    if opening:
+    if opening is not None:
         embed.add_field(name="Opening", value=f"{opening}°", inline=True)
     if nails is not None:
         embed.add_field(name="Nails", value=str(nails), inline=True)
-    if inner_ratio:
+    if inner_ratio is not None:
         embed.add_field(name="Inner Ratio", value=str(inner_ratio), inline=True)
+    if coverage_threshold is not None:
+        embed.add_field(
+            name="Coverage Threshold", value=str(coverage_threshold), inline=True
+        )
 
     embed.add_field(name="Total Voxels", value=str(total_voxels), inline=True)
 
@@ -250,7 +255,7 @@ async def on_ready() -> None:
 @app_commands.describe(
     width="Width of the oval in voxels",
     height="Height of the oval in voxels",
-    coverage_threshold="True oval coverage required to draw voxel. 0.0 = Any voxel touched by the oval gets drawn. 1.0 = Voxels must be completely covered by oval to be drawn.",
+    coverage_threshold='Oval coverage required to draw voxel. 0.0 = any voxel "touched" gets drawn. 1.0 = voxels completely covered gets drawn.',
     offset_x="Grid offset on the X axis in voxels.",
     offset_y="Grid offset on the Y axis in voxels.",
     border="Makes the shape hollow - specify the thickness of the shape border.",
@@ -286,6 +291,7 @@ async def oval(
             offset_y,
             total_voxels,
             border,
+            coverage_threshold=coverage_threshold,
         ),
         file=discord.File(buffer, filename="shape.png"),
     )
@@ -426,6 +432,7 @@ async def egg(
     width="Width of the bounding box in voxels",
     height="Height of the bounding box in voxels",
     sides="Number of sides (3 = triangle, 4 = square, …)",
+    coverage_threshold='Oval coverage required to draw voxel. 0.0 = any voxel "touched" gets drawn. 1.0 = voxels completely covered gets drawn.',
     angle="Rotation in degrees (counter-clockwise; 0 = flat bottom)",
     offset_x="Grid offset on the X axis in voxels.",
     offset_y="Grid offset on the Y axis in voxels.",
@@ -436,6 +443,7 @@ async def polygon(
     width: int,
     height: int,
     sides: int,
+    coverage_threshold: float = 0.5,
     angle: float = 0.0,
     offset_x: int = 0,
     offset_y: int = 0,
@@ -451,6 +459,7 @@ async def polygon(
         block_offset_x=offset_x,
         block_offset_y=offset_y,
         border=border,
+        coverage_threshold=coverage_threshold,
     )
 
     await interaction.followup.send(
@@ -466,62 +475,63 @@ async def polygon(
             border,
             sides=sides,
             angle=angle,
+            coverage_threshold=coverage_threshold,
         ),
         file=discord.File(buffer, filename="shape.png"),
     )
 
 
-@tree.command(description="Generate a horseshoe")
-@app_commands.describe(
-    width="Width of the bounding box in voxels",
-    height="Height of the bounding box in voxels",
-    opening="Angular size of the gap at the top, in degrees",
-    angle="Rotation in degrees (counter-clockwise; 0 = opening at the top)",
-    nails="Number of nail holes along the band (0 to disable)",
-    offset_x="Grid offset on the X axis in voxels.",
-    offset_y="Grid offset on the Y axis in voxels.",
-    border="Band thickness in voxels (defaults to ~28% of the radius).",
-)
-async def horseshoe(
-    interaction: discord.Interaction,
-    width: int,
-    height: int,
-    opening: float = 62.0,
-    angle: float = 0.0,
-    nails: int = 7,
-    offset_x: int = 0,
-    offset_y: int = 0,
-    border: float | None = None,
-) -> None:
-    await interaction.response.defer(thinking=True)
-    buffer, total_voxels = render(
-        "horseshoe",
-        width=width,
-        height=height,
-        opening=opening,
-        angle=angle,
-        nails=nails,
-        block_offset_x=offset_x,
-        block_offset_y=offset_y,
-        border=border,
-    )
+# @tree.command(description="Generate a horseshoe")
+# @app_commands.describe(
+#     width="Width of the bounding box in voxels",
+#     height="Height of the bounding box in voxels",
+#     opening="Angular size of the gap at the top, in degrees",
+#     angle="Rotation in degrees (counter-clockwise; 0 = opening at the top)",
+#     nails="Number of nail holes along the band (0 to disable)",
+#     offset_x="Grid offset on the X axis in voxels.",
+#     offset_y="Grid offset on the Y axis in voxels.",
+#     border="Band thickness in voxels (defaults to ~28% of the radius).",
+# )
+# async def horseshoe(
+#     interaction: discord.Interaction,
+#     width: int,
+#     height: int,
+#     opening: float = 62.0,
+#     angle: float = 0.0,
+#     nails: int = 7,
+#     offset_x: int = 0,
+#     offset_y: int = 0,
+#     border: float | None = None,
+# ) -> None:
+#     await interaction.response.defer(thinking=True)
+#     buffer, total_voxels = render(
+#         "horseshoe",
+#         width=width,
+#         height=height,
+#         opening=opening,
+#         angle=angle,
+#         nails=nails,
+#         block_offset_x=offset_x,
+#         block_offset_y=offset_y,
+#         border=border,
+#     )
 
-    await interaction.followup.send(
-        embed=generate_embed(
-            "Horseshoe",
-            f"Another horse is shoeless... {random.choice(TERMS_OF_ENDEARMENT)} 💋",
-            discord.Color.dark_grey(),
-            width,
-            height,
-            offset_x,
-            offset_y,
-            total_voxels,
-            border,
-            opening=opening,
-            nails=nails,
-        ),
-        file=discord.File(buffer, filename="shape.png"),
-    )
+#     await interaction.followup.send(
+#         embed=generate_embed(
+#             "Horseshoe",
+#             f"Another horse is shoeless... {random.choice(TERMS_OF_ENDEARMENT)} 💋",
+#             discord.Color.dark_grey(),
+#             width,
+#             height,
+#             offset_x,
+#             offset_y,
+#             total_voxels,
+#             border,
+#             opening=opening,
+#             nails=nails,
+#         ),
+#         file=discord.File(buffer, filename="shape.png"),
+#     )
 
 
 @tree.command(description="Generate an N-pointed star")
@@ -593,95 +603,74 @@ async def candied_fruit(
     juice_limit: float = 5.0,
     bucket_limit: float = 10.0,
 ) -> None:
-    optimal = total_fruit * 1.28 / 2.28
-    to_juice = math.floor(optimal)
+    syrup_per_fruit = juice_per_fruit * syrup_per_juice
+    # Each candy needs syrup_per_candy syrup plus 1 fruit, so fruit is
+    # split between juicing and candying:
+    optimal_candy = total_fruit * syrup_per_fruit / (syrup_per_candy + syrup_per_fruit)
+    candy = int(optimal_candy)
 
-    # Walk up by 1 if rounding down wastes fruit
-    for j in (to_juice, to_juice + 1):
-        juice = j * juice_per_fruit
-        syrup = juice * syrup_per_juice
-        candy = min(total_fruit - j, int(syrup / syrup_per_candy))
-        leftover_fruit = total_fruit - j - candy
-        leftover_syrup = syrup - candy * syrup_per_candy
-        if j == to_juice:
-            best = (j, candy, leftover_fruit, leftover_syrup)
-        elif candy > best[1] or (
-            candy == best[1] and leftover_fruit + leftover_syrup < best[2] + best[3]
-        ):
-            best = (j, candy, leftover_fruit, leftover_syrup)
+    # Work backwards to how many fruit must be juiced for that much candy
+    syrup_needed = candy * syrup_per_candy
+    juice_to_simmer = syrup_needed / syrup_per_juice
+    fruit_to_juice = math.ceil(juice_to_simmer / juice_per_fruit)
 
-    j, candy, lf, ls = best
+    # Derived quantities used throughout the output
+    fruit_to_keep = total_fruit - fruit_to_juice
+    total_juice = fruit_to_juice * juice_per_fruit
+    leftover_juice = total_juice - juice_to_simmer
+    leftover_fruit = fruit_to_keep - candy
 
-    total_syrup_needed = candy * syrup_per_candy
-    total_juice_needed = total_syrup_needed / syrup_per_juice
-    total_fruit_needed = math.ceil(total_juice_needed / juice_per_fruit)
-
-    if total_juice_needed < juice_limit:
+    if juice_to_simmer < juice_limit:
         await interaction.response.send_message(
-            f"You only have enough fruit to juice {total_juice_needed}L. Which will not juice in the fruit press (you need at least {juice_limit}L).",
+            f"You only have enough fruit to juice {juice_to_simmer:.03}L. Which will not juice in the fruit press (you need at least {juice_limit}L).",
             ephemeral=True,
         )
         return
 
     fruit_per_bucket = int(bucket_limit // juice_per_fruit)
+    min_fruit_per_press = math.ceil(juice_limit / juice_per_fruit)
 
-    full_stacks = total_fruit_needed // fruit_per_bucket
-    left_over_fruit = total_fruit_needed - full_stacks * fruit_per_bucket
-    left_over_arr = [left_over_fruit]
-    if not left_over_fruit:
-        left_over_arr = []
-    elif left_over_fruit * juice_per_fruit < juice_limit:
+    full_stacks, remainder_fruit = divmod(fruit_to_juice, fruit_per_bucket)
+    if not remainder_fruit:
+        partial_batches = []
+    elif remainder_fruit * juice_per_fruit < juice_limit:
+        # Remainder is too small to press; borrow from a full stack and
+        # split into two pressable batches
         full_stacks -= 1
-        juice_limit_fruit = math.ceil(juice_limit / juice_per_fruit)
-        left_over_arr = [
-            left_over_fruit + fruit_per_bucket - juice_limit_fruit,
-            juice_limit_fruit,
+        partial_batches = [
+            remainder_fruit + fruit_per_bucket - min_fruit_per_press,
+            min_fruit_per_press,
         ]
+    else:
+        partial_batches = [remainder_fruit]
 
     embed = discord.Embed(
         title=f"{total_fruit} fruit batch to candy", color=discord.Color.red()
     )
-    embed.description = "# Procedure:\n"
-    i = 1
+    steps = []
     if full_stacks:
-        embed.description += f"1. Juice {fruit_per_bucket} fruit {full_stacks} times (each gives {bucket_limit}L of juice)\n"
-        i += 1
-    for l in left_over_arr:
-        embed.description += (
-            f"{i}. Juice {l} fruits (Gives you {l*juice_per_fruit:.03}L of juice)\n"
+        steps.append(
+            f"Juice {fruit_per_bucket} fruit {full_stacks} times (each gives {bucket_limit}L of juice)"
         )
-        i += 1
+    for batch in partial_batches:
+        steps.append(
+            f"Juice {batch} fruit (Gives you {batch * juice_per_fruit:.03}L of juice)"
+        )
+    steps.append(
+        f"Simmer {juice_to_simmer:.03}L juice into {syrup_needed:.03}L of syrup"
+    )
+    steps.append(f"Simmer the {candy} fruit with {syrup_needed:.03}L of syrup")
+    steps.append(f"Enjoy a refreshing cup of {leftover_juice:.03}L juice")
 
-    embed.description += f"{i}. Simmer {total_juice_needed:.03}L juice into {total_syrup_needed:.03}L of syrup\n"
-    i += 1
-    embed.description += (
-        f"{i}. Simmer the {candy} fruit with {candy*syrup_per_candy:.03}L of syrup\n"
+    embed.description = "# Procedure:\n" + "".join(
+        f"{i}. {step}\n" for i, step in enumerate(steps, start=1)
     )
-    i += 1
-    embed.description += f"{i}. Enjoy a refreshing cup of {total_fruit_needed * juice_per_fruit - total_juice_needed:.03}L juice\n"
-    i += 1
 
-    embed.add_field(
-        name="Total amount of fruit to juice",
-        value=str(total_fruit_needed),
-        inline=True,
-    )
-    embed.add_field(
-        name="Amount of fruit to keep",
-        value=str(total_fruit - total_fruit_needed),
-        inline=True,
-    )
-    embed.add_field(name="Amount of candy created", value=str(candy), inline=True)
-    embed.add_field(
-        name="Leftover fruit",
-        value=str(j - total_fruit_needed),
-        inline=True,
-    )
-    embed.add_field(
-        name="Leftover juice",
-        value=f"{total_fruit_needed * juice_per_fruit - total_juice_needed:.03}L",
-        inline=True,
-    )
+    embed.add_field(name="Fruit to juice", value=str(fruit_to_juice), inline=True)
+    embed.add_field(name="Fruit to keep", value=str(fruit_to_keep), inline=True)
+    embed.add_field(name="Candy created", value=str(candy), inline=True)
+    embed.add_field(name="Leftover fruit", value=str(leftover_fruit), inline=True)
+    embed.add_field(name="Leftover juice", value=f"{leftover_juice:.03}L", inline=True)
 
     await interaction.response.send_message(embed=embed)
 

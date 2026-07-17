@@ -28,12 +28,10 @@ def fill_lancet(
     d = (H * H - a * a) / (2.0 * a)
     R = (a * a + H * H) / (2.0 * a)
 
-    grid_w = math.ceil(width) + 4
-    grid_h = math.ceil(height) + 4
-    if grid_w % 2 != 0:
-        grid_w += 1
-    if grid_h % 2 != 0:
-        grid_h += 1
+    grid_w = max(1, math.ceil(width)) + 4
+    grid_h = max(1, math.ceil(height)) + 4
+    cx = width / 2.0 + 2
+    cy = height / 2.0 + 2
 
     # Place the arch so its base sits at the bottom of the grid
     # cx = horizontal centre, base_y = bottom row (in voxel coords, y-down)

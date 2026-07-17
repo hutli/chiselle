@@ -57,18 +57,20 @@ def fill_oval(
     border: float | None,
     coverage_threshold: float,
 ) -> tuple[int, int, list[list[bool]], float, float, str, typing.Callable]:
-    if not 0.0 < coverage_threshold <= 1.0:
-        raise ValueError("coverage must be in (0, 1]")
+    if coverage_threshold < 1e-9 * 2:
+        coverage_threshold = 1e-9 * 2
+    elif coverage_threshold > 1.0:
+        coverage_threshold = 1.0
+
+    # Tiny tolerance so coverage=0.5 fills exactly-half voxels and float
+    # noise doesn't flip borderline cases.
+    threshold = coverage_threshold - 1e-9
 
     rx, ry = width / 2.0, height / 2.0
-
-    # Grid: oval size, padded by 4, rounded up to even so the center
-    # (cx, cy) sits exactly on a pixel boundary and the shape is symmetric.
-    grid_w = math.ceil(width) + 4
-    grid_h = math.ceil(height) + 4
-    grid_w += grid_w % 2
-    grid_h += grid_h % 2
-    cx, cy = grid_w / 2.0, grid_h / 2.0
+    grid_w = max(1, math.ceil(width)) + 4
+    grid_h = max(1, math.ceil(height)) + 4
+    cx = rx + 2
+    cy = ry + 2
 
     # Inner radii for the ring variant. If the border eats the whole
     # radius, drop the hole and fill the solid oval instead.
@@ -77,10 +79,6 @@ def fill_oval(
         ri, rj = rx - border, ry - border
         if ri <= 0 or rj <= 0:
             ri = rj = None
-
-    # Tiny tolerance so coverage=0.5 fills exactly-half pixels and float
-    # noise doesn't flip borderline cases.
-    threshold = coverage_threshold - 1e-9
 
     filled = [[False] * grid_w for _ in range(grid_h)]
     for vy in range(grid_h):
