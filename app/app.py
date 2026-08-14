@@ -660,7 +660,8 @@ async def candied_fruit(
         f"Simmer {juice_to_simmer:.03}L juice into {syrup_needed:.03}L of syrup"
     )
     steps.append(f"Simmer the {candy} fruit with {syrup_needed:.03}L of syrup")
-    steps.append(f"Enjoy a refreshing cup of {leftover_juice:.03}L juice")
+    if leftover_juice:
+        steps.append(f"Enjoy a refreshing cup of {leftover_juice:.03}L juice")
 
     embed.description = "# Procedure:\n" + "".join(
         f"{i}. {step}\n" for i, step in enumerate(steps, start=1)
